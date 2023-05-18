@@ -15,7 +15,7 @@ struct TodoFeature: Reducer {
     case viewDidAppear
     case didLoad(todos: Todo.FetchedResults)
     case addTodoButtonTapped
-    case toggleTodo(todo: Fetched<Todo>)
+    case toggleComplete(todo: Fetched<Todo>)
   }
 
   @Dependency(\.persistentContainer) var persistentContainer;
@@ -40,7 +40,7 @@ struct TodoFeature: Reducer {
         state.todos = todos
         return .none
 
-      case let .toggleTodo(todo: todo):
+      case let .toggleComplete(todo: todo):
         return .run { @MainActor _ in
           _ = persistentContainer.with { context in
             todo.withManagedObject { update in
@@ -81,7 +81,7 @@ struct ContentView: View {
           HStack {
             Text(todo.title ?? "Unknown")
             Spacer()
-            Button(action: { viewStore.send(.toggleTodo(todo: todo)) }) {
+            Button(action: { viewStore.send(.toggleComplete(todo: todo)) }) {
               Image(systemName: todo.complete ? "checkmark.square.fill" : "square")
                 .foregroundColor(todo.complete ? .green : nil)
             }
