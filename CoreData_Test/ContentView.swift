@@ -9,64 +9,104 @@ struct TodoFeature: Reducer {
 
   struct State: Equatable {
     var todos: Todo.FetchedResults = .empty
+    @PresentationState var addTodo: AddTodo.State?
   }
 
   enum Action: Equatable {
     case viewDidAppear
     case deleteTapped(todo: Fetched<Todo>)
     case didLoad(todos: Todo.FetchedResults)
+    case editButtonTapped(todo: Fetched<Todo>)
     case addTodoButtonTapped
     case toggleComplete(todo: Fetched<Todo>)
+    case saveButtonTapped
+    case addTodo(PresentationAction<AddTodo.Action>)
+  }
+
+  struct Destination: Reducer {
+
+    enum State: Equatable {
+      case addTodo(AddTodo.State)
+      case editTodo(EditTodo.State)
+    }
+
+    enum Action: Equatable {
+      case addTodo(AddTodo.Action)
+      case editTodo(EditTodo.Action)
+    }
+
+    var body: some ReducerOf<Self> {
+      Scope(state: /State.addTodo, action: /Action.addTodo) {
+        AddTodo()
+      }
+      Scope(state: /State.editTodo, action: /Action.editTodo) {
+        EditTodo()
+      }
+    }
   }
 
   @Dependency(\.persistentContainer) var persistentContainer;
   @Dependency(\.uuid) var uuid;
+  @Dependency(\.todoClient) var todoClient;
 
   var body: some ReducerOf<Self> {
     Reduce { state, action in
       switch action {
       case .viewDidAppear:
-        return .run { @MainActor send in
-          for try await todos in self.persistentContainer.request(
-            Todo.self,
-            sortDescriptors: [
-              NSSortDescriptor(keyPath: \Todo.title, ascending: true)
-            ]
-          ) {
-            send(.didLoad(todos: todos))
+        return .run { send in
+          try await todoClient.fetch {
+            await send(.didLoad(todos: $0))
           }
         }
 
       case let .deleteTapped(todo: todo):
         return .run { _ in
-          await todo.withManagedObject { todo in
-            todo.managedObjectContext?.delete(todo)
-            try! todo.managedObjectContext?.save()
-          }
+          try await todoClient.delete(todo)
         }
 
       case .didLoad(todos: let todos):
         state.todos = todos
         return .none
 
+      case .editButtonTapped(todo: _):
+//        state.addTodo = .init(title: todo.title ?? "", isComplete: todo.complete)
+        return .none
+
       case let .toggleComplete(todo: todo):
         return .run { _ in
-          await todo.withManagedObject { update in
-            update.complete.toggle()
-            try! update.managedObjectContext?.save()
-          }
+          try await todoClient.toggleComplete(todo)
+//          try await todoClient.update(todo, updates: .ini)
+//          await todo.withManagedObject { update in
+//            update.complete.toggle()
+//            try! update.managedObjectContext?.save()
+//          }
         }
 
       case .addTodoButtonTapped:
-        return .run { _ in
-          await persistentContainer.withNewBackgroundContext { context in
+        state.addTodo = .init()
+        return .none
+
+      case .addTodo:
+        return .none
+
+      case .saveButtonTapped:
+        guard let addTodo = state.addTodo
+        else { return .none }
+        return .run { send in
+          try await persistentContainer.withNewBackgroundContext { context in
             let todo = Todo(context: context)
-            todo.title = "Finish CoreData"
             todo.id = uuid()
-            try! context.save()
+            todo.title = addTodo.title
+            todo.complete = addTodo.isComplete
+            try todoClient.save(todo)
+//            try! context.save()
           }
+          await send(.addTodo(.dismiss))
         }
       }
+    }
+    .ifLet(\.$addTodo, action: /Action.addTodo) {
+      AddTodo()
     }
   }
 }
@@ -98,6 +138,12 @@ struct ContentView: View {
               } label: {
                 Label("Delete", systemImage: "trash")
               }
+
+              Button {
+                viewStore.send(.editButtonTapped(todo: todo))
+              } label: {
+                Label("Edit", systemImage: "square.and.pencil")
+              }
             }
           }
         }
@@ -108,6 +154,26 @@ struct ContentView: View {
       }
       .padding()
       .onAppear { viewStore.send(.viewDidAppear) }
+      .sheet(
+        store: store.scope(state: \.$addTodo, action: TodoFeature.Action.addTodo)
+      ) { store in
+        NavigationStack {
+          AddTodoView(store: store)
+            .navigationTitle("Add Todo")
+            .toolbar {
+              ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") {
+                  viewStore.send(.addTodo(.dismiss))
+                }
+              }
+              ToolbarItem(placement: .confirmationAction) {
+                Button("Save") {
+                  viewStore.send(.saveButtonTapped)
+                }
+              }
+            }
+        }
+      }
     }
   }
 }
