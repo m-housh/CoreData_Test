@@ -13,6 +13,7 @@ struct TodoFeature: Reducer {
 
   enum Action: Equatable {
     case viewDidAppear
+    case deleteTapped(todo: Fetched<Todo>)
     case didLoad(todos: Todo.FetchedResults)
     case addTodoButtonTapped
     case toggleComplete(todo: Fetched<Todo>)
@@ -36,28 +37,32 @@ struct TodoFeature: Reducer {
           }
         }
 
+      case let .deleteTapped(todo: todo):
+        return .run { _ in
+          await todo.withManagedObject { todo in
+            todo.managedObjectContext?.delete(todo)
+            try! todo.managedObjectContext?.save()
+          }
+        }
+
       case .didLoad(todos: let todos):
         state.todos = todos
         return .none
 
       case let .toggleComplete(todo: todo):
-        return .run { @MainActor _ in
-          _ = persistentContainer.with { context in
-            todo.withManagedObject { update in
-              update.complete.toggle()
-//              try! update.managedObjectContext!.save()
-            }
-            try! context.save()
+        return .run { _ in
+          await todo.withManagedObject { update in
+            update.complete.toggle()
+            try! update.managedObjectContext?.save()
           }
         }
 
       case .addTodoButtonTapped:
-        return .run { @MainActor _ in
-          _ = persistentContainer.with { context in
-            let newTodo = Todo(context: context)
-            newTodo.title = "Finish CoreData"
-            newTodo.id = uuid()
-
+        return .run { _ in
+          await persistentContainer.withNewBackgroundContext { context in
+            let todo = Todo(context: context)
+            todo.title = "Finish CoreData"
+            todo.id = uuid()
             try! context.save()
           }
         }
@@ -77,13 +82,22 @@ struct ContentView: View {
           .foregroundColor(.accentColor)
         Text("Hello, world!")
 
-        List(viewStore.todos, id: \.id) { (todo: Fetched<Todo>) in
-          HStack {
-            Text(todo.title ?? "Unknown")
-            Spacer()
-            Button(action: { viewStore.send(.toggleComplete(todo: todo)) }) {
-              Image(systemName: todo.complete ? "checkmark.square.fill" : "square")
-                .foregroundColor(todo.complete ? .green : nil)
+        List {
+          ForEach(viewStore.todos, id: \.id) { (todo: Fetched<Todo>) in
+            HStack {
+              Text(todo.title ?? "Unknown")
+              Spacer()
+              Button(action: { viewStore.send(.toggleComplete(todo: todo)) }) {
+                Image(systemName: todo.complete ? "checkmark.square.fill" : "square")
+                  .foregroundColor(todo.complete ? .green : nil)
+              }
+            }
+            .swipeActions(allowsFullSwipe: true) {
+              Button(role: .destructive) {
+                viewStore.send(.deleteTapped(todo: todo))
+              } label: {
+                Label("Delete", systemImage: "trash")
+              }
             }
           }
         }
@@ -96,14 +110,6 @@ struct ContentView: View {
       .onAppear { viewStore.send(.viewDidAppear) }
     }
   }
-//
-//  func toggleTodo(id: UUID?) {
-//    guard let id = id,
-//            let todo = todos.first(where: { $0.id == id })
-//    else { return }
-//    todo.complete.toggle()
-//    try? moc.save()
-//  }
 }
 
 
